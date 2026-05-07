@@ -9,9 +9,9 @@ from utils.theme import (
     TEXT_DARK, TEXT_LIGHT, TEXT_GREY, TEXT_MUTED,
     RES_LABELS, mk_field, mk_dropdown,
     section_title, primary_btn, danger_btn,
-    tbl_header, status_chip, info_banner, snack, confirm_dialog,
-    open_dialog, close_dialog
+    tbl_header, status_chip, info_banner, snack
 )
+from utils.modal import show_modal
 
 RES_FILTER = ["Todos", "pending", "converted", "completed", "cancelled"]
 COLS   = ["ID", "Cliente",   "Vehículo",   "Inicio",  "Fin",    "Estado"]
@@ -19,10 +19,8 @@ WIDTHS = [45,   180,          180,           110,       110,      130]
 
 
 def _valid_date(s):
-    try:
-        datetime.strptime(s, "%Y-%m-%d"); return True
-    except Exception:
-        return False
+    try: datetime.strptime(s, "%Y-%m-%d"); return True
+    except: return False
 
 
 def reservations_view(page: ft.Page) -> ft.Container:
@@ -52,7 +50,7 @@ def reservations_view(page: ft.Page) -> ft.Container:
         )
 
     def load(e=None):
-        key = filter_dd.value if filter_dd.value else "Todos"
+        key = filter_dd.value or "Todos"
         filters = None if key == "Todos" else {"status": key}
         table_body.controls = [make_row(r) for r in get_all_reservations(filters)]
         page.update()
@@ -60,78 +58,81 @@ def reservations_view(page: ft.Page) -> ft.Container:
     def open_form(e=None):
         customers = get_all_customers()
         vehicles  = get_available_vehicles()
-
         if not customers:
-            snack(page, "No hay clientes registrados. Agrega uno primero.", error=True); return
+            snack(page, "No hay clientes. Agrega uno primero.", error=True); return
         if not vehicles:
             snack(page, "No hay vehículos disponibles.", error=True); return
 
         f_cust  = mk_dropdown("Cliente *",
                               [ft.dropdown.Option(str(c["id"]), f"{c['id']} — {c['full_name']}") for c in customers],
-                              width=380)
+                              width=420)
         f_veh   = mk_dropdown("Vehículo *",
                               [ft.dropdown.Option(str(v["id"]), f"{v['id']} — {v['brand']} {v['model']} (${v['rate_per_day']:.2f}/día)") for v in vehicles],
-                              width=380)
-        f_start = mk_field("Fecha Inicio (YYYY-MM-DD) *", width=190)
-        f_end   = mk_field("Fecha Fin   (YYYY-MM-DD) *", width=190)
-        err     = ft.Text("", color=DANGER, size=12)
+                              width=420)
+        f_start = mk_field("Fecha Inicio (YYYY-MM-DD) *", width=200)
+        f_end   = mk_field("Fecha Fin   (YYYY-MM-DD) *", width=200)
+        err     = ft.Text("", color=DANGER, size=13)
+        close_fn = {"fn": None}
 
         def save(e):
             if not f_cust.value:
                 err.value = "⚠ Selecciona un cliente."; page.update(); return
             if not f_veh.value:
                 err.value = "⚠ Selecciona un vehículo."; page.update(); return
-            start = f_start.value.strip() if f_start.value else ""
-            end   = f_end.value.strip()   if f_end.value   else ""
+            start = (f_start.value or "").strip()
+            end   = (f_end.value   or "").strip()
             if not start or not _valid_date(start):
-                err.value = "⚠ Fecha inicio inválida. Usa formato YYYY-MM-DD."; page.update(); return
+                err.value = "⚠ Fecha inicio inválida. Formato: YYYY-MM-DD"; page.update(); return
             if not end or not _valid_date(end):
-                err.value = "⚠ Fecha fin inválida. Usa formato YYYY-MM-DD."; page.update(); return
+                err.value = "⚠ Fecha fin inválida. Formato: YYYY-MM-DD"; page.update(); return
             if end <= start:
                 err.value = "⚠ La fecha fin debe ser posterior al inicio."; page.update(); return
 
             ok, msg = add_reservation(int(f_cust.value), int(f_veh.value), start, end)
             if ok:
-                close_dialog(page, dlg); snack(page, msg); load()
+                if close_fn["fn"]: close_fn["fn"]()
+                snack(page, msg); load()
             else:
                 err.value = f"⚠ {msg}"; page.update()
 
-        dlg = ft.AlertDialog(
-            modal=True,
-            bgcolor=CARD_BG,
-            title=ft.Text("📅 Nueva Reservación", color=TEXT_DARK, size=16),
-            content=ft.Container(
-                bgcolor=CARD_BG,
-                width=440,
-                height=360,
-                content=ft.Column([
-                    f_cust,
-                    f_veh,
-                    ft.Row([f_start, f_end], spacing=12),
-                    info_banner("ℹ️ Al crear una renta para este vehículo y fechas,\nla reserva se convertirá automáticamente."),
-                    err,
-                ], spacing=14, tight=True),
-            ),
-            actions=[
-                ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
-                ft.ElevatedButton("Cancelar",   on_click=lambda e: close_dialog(page, dlg),
-                                  bgcolor=HEADER_BG, color=TEXT_MUTED),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        open_dialog(page, dlg)
+        content = ft.Column([
+            f_cust, f_veh,
+            ft.Row([f_start, f_end], spacing=12),
+            info_banner("ℹ️ Al crear una renta con este vehículo y fechas,\nla reserva se convertirá automáticamente."),
+            err,
+        ], spacing=14, tight=True)
+
+        actions = [
+            ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
+            ft.ElevatedButton("Cancelar",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+        close_fn["fn"] = show_modal(page, "📅 Nueva Reservación", content, actions, width=480)
 
     def cancel_res(e):
         if not selected["data"]:
-            snack(page, "Selecciona una reserva de la tabla primero.", error=True); return
+            snack(page, "Selecciona una reserva primero.", error=True); return
         r = selected["data"]
         if r["status"] != "pending":
-            snack(page, f"Solo se pueden cancelar reservas Pendientes. Esta está: {RES_LABELS.get(r['status'], r['status'])}.", error=True); return
-        def do():
+            snack(page, f"Solo puedes cancelar reservas Pendientes. Esta está: {RES_LABELS.get(r['status'], r['status'])}.", error=True); return
+
+        close_fn = {"fn": None}
+        def do_cancel(e):
             ok, msg = cancel_reservation(r["id"])
+            if close_fn["fn"]: close_fn["fn"]()
             snack(page, msg, error=not ok)
             if ok: selected["data"] = None; load()
-        confirm_dialog(page, f"¿Cancelar la reserva #{r['id']} de {r['customer_name']}?", do)
+
+        content = ft.Text(f"¿Cancelar reserva #{r['id']} de {r['customer_name']}?",
+                          color=TEXT_GREY, size=14)
+        actions = [
+            ft.ElevatedButton("❌ Cancelar Reserva", on_click=do_cancel, bgcolor=DANGER, color=TEXT_LIGHT),
+            ft.ElevatedButton("Volver",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+        close_fn["fn"] = show_modal(page, "⚠️ Confirmar Cancelación", content, actions, width=380)
 
     load()
 

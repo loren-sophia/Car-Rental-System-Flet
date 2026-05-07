@@ -8,9 +8,9 @@ from utils.theme import (
     CARD_BG, CARD_SEL, HEADER_BG, BORDER_COL,
     TEXT_DARK, TEXT_LIGHT, TEXT_GREY, TEXT_MUTED,
     section_title, primary_btn, danger_btn, mk_field,
-    tbl_header, snack, confirm_dialog,
-    open_dialog, close_dialog
+    tbl_header, snack
 )
+from utils.modal import show_modal
 
 COLS   = ["ID", "Nombre",   "Teléfono",  "Email",   "Licencia"]
 WIDTHS = [45,   180,         130,          200,        150]
@@ -49,26 +49,28 @@ def customers_view(page: ft.Page) -> ft.Container:
 
     def open_form(customer=None):
         ie = customer is not None
-        f_name  = mk_field("Nombre completo *", customer["full_name"]      if ie else "", width=340)
-        f_phone = mk_field("Teléfono *",        customer["phone"]          if ie else "", width=200)
-        f_email = mk_field("Email (opcional)",  customer["email"] or ""    if ie else "", width=280)
-        f_lic   = mk_field("No. Licencia *",    customer["license_number"] if ie else "", width=200)
-        err     = ft.Text("", color=DANGER, size=12)
+        f_name  = mk_field("Nombre completo *", customer["full_name"]      if ie else "", width=400)
+        f_phone = mk_field("Teléfono *",        customer["phone"]          if ie else "", width=190)
+        f_email = mk_field("Email (opcional)",  customer["email"] or ""    if ie else "", width=250)
+        f_lic   = mk_field("No. Licencia *",    customer["license_number"] if ie else "", width=190)
+        err     = ft.Text("", color=DANGER, size=13)
+
+        close_fn = {"fn": None}
 
         def save(e):
-            name  = f_name.value.strip()  if f_name.value  else ""
-            phone = f_phone.value.strip() if f_phone.value else ""
-            email = f_email.value.strip() if f_email.value else ""
-            lic   = f_lic.value.strip()   if f_lic.value   else ""
+            name  = (f_name.value  or "").strip()
+            phone = (f_phone.value or "").strip()
+            email = (f_email.value or "").strip()
+            lic   = (f_lic.value   or "").strip()
 
             if not name:
-                err.value = "⚠ El nombre es obligatorio."; page.update(); return
+                err.value = "⚠ El nombre completo es obligatorio."; page.update(); return
             if not phone:
                 err.value = "⚠ El teléfono es obligatorio."; page.update(); return
             if not lic:
                 err.value = "⚠ El número de licencia es obligatorio."; page.update(); return
             if email and not re.match(r"^[\w\.-]+@[\w\.-]+\.\w{2,}$", email):
-                err.value = "⚠ El email no tiene un formato válido."; page.update(); return
+                err.value = "⚠ El email no tiene formato válido."; page.update(); return
 
             if ie:
                 ok, msg = update_customer(customer["id"], name, phone, email, lic)
@@ -76,36 +78,50 @@ def customers_view(page: ft.Page) -> ft.Container:
                 ok, msg = add_customer(name, phone, email, lic)
 
             if ok:
-                close_dialog(page, dlg)
+                if close_fn["fn"]: close_fn["fn"]()
                 snack(page, msg)
                 selected["data"] = None
                 load()
             else:
                 err.value = f"⚠ {msg}"; page.update()
 
-        dlg = ft.AlertDialog(
-            modal=True,
-            bgcolor=CARD_BG,
-            title=ft.Text("✏️ Editar Cliente" if ie else "➕ Nuevo Cliente", color=TEXT_DARK, size=16),
-            content=ft.Container(
-                bgcolor=CARD_BG,
-                width=460,
-                height=300,
-                content=ft.Column([
-                    f_name,
-                    ft.Row([f_phone, f_email], spacing=12),
-                    f_lic,
-                    err,
-                ], spacing=14, tight=True),
-            ),
-            actions=[
-                ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
-                ft.ElevatedButton("Cancelar",   on_click=lambda e: close_dialog(page, dlg),
-                                  bgcolor=HEADER_BG, color=TEXT_MUTED),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
+        content = ft.Column([
+            f_name,
+            ft.Row([f_phone, f_email], spacing=12),
+            f_lic,
+            err,
+        ], spacing=14, tight=True)
+
+        actions = [
+            ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
+            ft.ElevatedButton("Cancelar",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+
+        title = "✏️ Editar Cliente" if ie else "➕ Nuevo Cliente"
+        close_fn["fn"] = show_modal(page, title, content, actions, width=480)
+
+    def confirm_delete(customer):
+        close_fn = {"fn": None}
+
+        def do_delete(e):
+            ok, msg = delete_customer(customer["id"])
+            if close_fn["fn"]: close_fn["fn"]()
+            snack(page, msg, error=not ok)
+            if ok: selected["data"] = None; load()
+
+        content = ft.Text(
+            f"¿Estás seguro de eliminar a {customer['full_name']}?\nEsta acción no se puede deshacer.",
+            color=TEXT_GREY, size=14,
         )
-        open_dialog(page, dlg)
+        actions = [
+            ft.ElevatedButton("🗑 Eliminar", on_click=do_delete, bgcolor=DANGER, color=TEXT_LIGHT),
+            ft.ElevatedButton("Cancelar",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+        close_fn["fn"] = show_modal(page, "⚠️ Confirmar Eliminación", content, actions, width=400)
 
     def edit(e):
         if not selected["data"]:
@@ -115,12 +131,7 @@ def customers_view(page: ft.Page) -> ft.Container:
     def delete(e):
         if not selected["data"]:
             snack(page, "Selecciona un cliente de la tabla primero.", error=True); return
-        c = selected["data"]
-        def do():
-            ok, msg = delete_customer(c["id"])
-            snack(page, msg, error=not ok)
-            if ok: selected["data"] = None; load()
-        confirm_dialog(page, f"¿Eliminar al cliente {c['full_name']}?", do)
+        confirm_delete(selected["data"])
 
     load()
 
