@@ -8,18 +8,17 @@ from utils.theme import (
     TEXT_DARK, TEXT_LIGHT, TEXT_GREY, TEXT_MUTED,
     VEHICLE_TYPES, VEHICLE_STATUSES,
     section_title, primary_btn, danger_btn, mk_field, mk_dropdown,
-    status_chip, tbl_header, snack, confirm_dialog,
-    open_dialog, close_dialog
+    status_chip, tbl_header, snack
 )
+from utils.modal import show_modal
 
 COLS   = ["ID", "Marca", "Modelo", "Año",  "Tipo",  "Tarifa/Día", "Estado"]
 WIDTHS = [45,   120,     120,      60,     110,     100,           110]
 
 
 def vehicles_view(page: ft.Page) -> ft.Container:
-    selected   = {"data": None}
-
-    filter_brand  = mk_field("Marca",  width=150)
+    selected      = {"data": None}
+    filter_brand  = mk_field("Marca", width=150)
     filter_type   = mk_dropdown("Tipo",
                                 [ft.dropdown.Option("Todos")] + [ft.dropdown.Option(t) for t in VEHICLE_TYPES],
                                 "Todos", width=130)
@@ -60,50 +59,41 @@ def vehicles_view(page: ft.Page) -> ft.Container:
         page.update()
 
     def clear_filters(e):
-        filter_brand.value = ""
-        filter_type.value  = "Todos"
-        filter_status.value = "Todos"
-        selected["data"] = None
-        load()
+        filter_brand.value = ""; filter_type.value = "Todos"; filter_status.value = "Todos"
+        selected["data"] = None; load()
 
     def open_form(vehicle=None):
         ie = vehicle is not None
-        f_brand  = mk_field("Marca *",           vehicle["brand"]              if ie else "", width=220)
-        f_model  = mk_field("Modelo *",          vehicle["model"]              if ie else "", width=220)
+        f_brand  = mk_field("Marca *",           vehicle["brand"]              if ie else "", width=210)
+        f_model  = mk_field("Modelo *",          vehicle["model"]              if ie else "", width=210)
         f_year   = mk_field("Año *",             str(vehicle["year"])          if ie else "", ft.KeyboardType.NUMBER, width=140)
         f_rate   = mk_field("Tarifa/Día ($) *",  str(vehicle["rate_per_day"]) if ie else "", ft.KeyboardType.NUMBER, width=140)
         f_type   = mk_dropdown("Tipo *",
                                [ft.dropdown.Option(t) for t in VEHICLE_TYPES],
-                               vehicle["vehicle_type"] if ie else VEHICLE_TYPES[0], width=220)
+                               vehicle["vehicle_type"] if ie else VEHICLE_TYPES[0], width=210)
         f_status = mk_dropdown("Estado *",
                                [ft.dropdown.Option(s) for s in VEHICLE_STATUSES],
-                               vehicle["status"] if ie else "available", width=220)
-        err = ft.Text("", color=DANGER, size=12)
+                               vehicle["status"] if ie else "available", width=210)
+        err = ft.Text("", color=DANGER, size=13)
+        close_fn = {"fn": None}
 
         def save(e):
-            # Validations
-            brand = f_brand.value.strip() if f_brand.value else ""
-            model = f_model.value.strip() if f_model.value else ""
+            brand = (f_brand.value or "").strip()
+            model = (f_model.value or "").strip()
             if not brand:
                 err.value = "⚠ La Marca es obligatoria."; page.update(); return
             if not model:
                 err.value = "⚠ El Modelo es obligatorio."; page.update(); return
             try:
-                year = int(f_year.value)
-                if year < 1900 or year > 2030:
-                    raise ValueError
+                year = int(f_year.value or "")
+                if not (1900 <= year <= 2030): raise ValueError
             except (ValueError, TypeError):
                 err.value = "⚠ Año inválido (ej: 2022)."; page.update(); return
             try:
-                rate = float(f_rate.value)
-                if rate <= 0:
-                    raise ValueError
+                rate = float(f_rate.value or "")
+                if rate <= 0: raise ValueError
             except (ValueError, TypeError):
                 err.value = "⚠ Tarifa debe ser un número mayor a 0."; page.update(); return
-            if not f_type.value:
-                err.value = "⚠ Selecciona un tipo."; page.update(); return
-            if not f_status.value:
-                err.value = "⚠ Selecciona un estado."; page.update(); return
 
             if ie:
                 ok, msg = update_vehicle(vehicle["id"], brand, model, year, f_type.value, rate, f_status.value)
@@ -111,52 +101,54 @@ def vehicles_view(page: ft.Page) -> ft.Container:
                 ok, msg = add_vehicle(brand, model, year, f_type.value, rate, f_status.value)
 
             if ok:
-                close_dialog(page, dlg)
-                snack(page, msg)
-                selected["data"] = None
-                load()
+                if close_fn["fn"]: close_fn["fn"]()
+                snack(page, msg); selected["data"] = None; load()
             else:
                 err.value = f"⚠ {msg}"; page.update()
 
-        dlg = ft.AlertDialog(
-            modal=True,
-            bgcolor=CARD_BG,
-            title=ft.Text("✏️ Editar Vehículo" if ie else "➕ Nuevo Vehículo", color=TEXT_DARK, size=16),
-            content=ft.Container(
-                bgcolor=CARD_BG,
-                width=500,
-                height=280,
-                content=ft.Column([
-                    ft.Row([f_brand, f_model], spacing=12),
-                    ft.Row([f_year,  f_rate],  spacing=12),
-                    ft.Row([f_type,  f_status], spacing=12),
-                    err,
-                ], spacing=14, tight=True),
-            ),
-            actions=[
-                ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
-                ft.ElevatedButton("Cancelar",   on_click=lambda e: close_dialog(page, dlg),
-                                  bgcolor=HEADER_BG, color=TEXT_MUTED),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
+        content = ft.Column([
+            ft.Row([f_brand, f_model], spacing=12),
+            ft.Row([f_year,  f_rate],  spacing=12),
+            ft.Row([f_type,  f_status], spacing=12),
+            err,
+        ], spacing=14, tight=True)
+
+        actions = [
+            ft.ElevatedButton("💾 Guardar", on_click=save, bgcolor=SUCCESS, color=TEXT_LIGHT),
+            ft.ElevatedButton("Cancelar",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+        close_fn["fn"] = show_modal(page, "✏️ Editar Vehículo" if ie else "➕ Nuevo Vehículo",
+                                    content, actions, width=500)
+
+    def confirm_delete(vehicle):
+        close_fn = {"fn": None}
+        def do_delete(e):
+            ok, msg = delete_vehicle(vehicle["id"])
+            if close_fn["fn"]: close_fn["fn"]()
+            snack(page, msg, error=not ok)
+            if ok: selected["data"] = None; load()
+
+        content = ft.Text(
+            f"¿Eliminar {vehicle['brand']} {vehicle['model']} ({vehicle['year']})?\nEsta acción no se puede deshacer.",
+            color=TEXT_GREY, size=14,
         )
-        open_dialog(page, dlg)
+        actions = [
+            ft.ElevatedButton("🗑 Eliminar", on_click=do_delete, bgcolor=DANGER, color=TEXT_LIGHT),
+            ft.ElevatedButton("Cancelar",
+                              on_click=lambda e: close_fn["fn"]() if close_fn["fn"] else None,
+                              bgcolor=HEADER_BG, color=TEXT_MUTED),
+        ]
+        close_fn["fn"] = show_modal(page, "⚠️ Confirmar Eliminación", content, actions, width=380)
 
     def edit(e):
-        if not selected["data"]:
-            snack(page, "Selecciona un vehículo de la tabla primero.", error=True); return
+        if not selected["data"]: snack(page, "Selecciona un vehículo primero.", error=True); return
         open_form(selected["data"])
 
     def delete(e):
-        if not selected["data"]:
-            snack(page, "Selecciona un vehículo de la tabla primero.", error=True); return
-        v = selected["data"]
-        def do():
-            ok, msg = delete_vehicle(v["id"])
-            snack(page, msg, error=not ok)
-            if ok:
-                selected["data"] = None; load()
-        confirm_dialog(page, f"¿Eliminar {v['brand']} {v['model']}? Esta acción no se puede deshacer.", do)
+        if not selected["data"]: snack(page, "Selecciona un vehículo primero.", error=True); return
+        confirm_delete(selected["data"])
 
     load()
 
